@@ -168,7 +168,8 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.shadowMap.enabled = true;
             renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-            renderer.setPixelRatio(window.devicePixelRatio);
+            // Set pixel ratio above 1.0 for high-DPI screens
+            renderer.setPixelRatio(window.devicePixelRatio > 1 ? window.devicePixelRatio : 1.5);
             renderer.outputEncoding = THREE.sRGBEncoding;
             document.getElementById('canvas-container').appendChild(renderer.domElement);
 
