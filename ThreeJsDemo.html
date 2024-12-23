@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>FBX Viewer</title>
+    <style>
+        body { 
+            margin: 0;
+            background: #1a1a1a;
+        }
+        #canvas-container { 
+            width: 100vw; 
+            height: 100vh; 
+            position: relative;
+        }
+        #controls-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 100;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            border: none;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            font-family: Arial, sans-serif;
+        }
+        #file-input {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 100;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            border: none;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            font-family: Arial, sans-serif;
+        }
+        #loading {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            z-index: 1000;
+            font-family: Arial, sans-serif;
+        }
+        .control-group {
+            margin-bottom: 10px;
+        }
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        .value-display {
+            font-size: 12px;
+            color: #666;
+            margin-top: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container">
+        <input type="file" id="file-input" accept=".fbx" />
+        <div id="loading">Loading model...</div>
+        <div id="controls-panel">
+            <div class="control-group">
+                <label>Roughness</label>
+                <input type="range" id="roughness" min="0" max="1" step="0.01" value="0.3">
+                <div class="value-display">0.3</div>
+            </div>
+            <div class="control-group">
+                <label>Metalness</label>
+                <input type="range" id="metalness" min="0" max="1" step="0.01" value="0.7">
+                <div class="value-display">0.7</div>
+            </div>
+            <div class="control-group">
+                <label>Environment Intensity</label>
+                <input type="range" id="envMapIntensity" min="0" max="2" step="0.1" value="1.0">
+                <div class="value-display">1.0</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/libs/fflate.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/FBXLoader.js"></script>
+
+    <script>
+        let scene, camera, renderer, controls;
+        let currentModel = null;
+
+        // Add material controls handling
+        function initMaterialControls() {
+            const roughnessSlider = document.getElementById('roughness');
+            const metalnessSlider = document.getElementById('metalness');
+            const envMapIntensitySlider = document.getElementById('envMapIntensity');
+
+            function updateMaterialProperty(property, value) {
+                if (!currentModel) {
+                    console.log('No model loaded yet');
+                    return;
+                }
+
+                console.log(`Updating ${property}:`, value);
+                
+                currentModel.traverse(function(child) {
+                    if (child.isMesh && child.material) {
+                        console.log(`Updating material for mesh: ${child.name}`, {
+                            before: child.material[property],
+                            after: value
+                        });
+                        child.material[property] = value;
+                        child.material.needsUpdate = true;
+                    }
+                });
+            }
+
+            function updateValueDisplay(slider) {
+                const displayElement = slider.nextElementSibling;
+                displayElement.textContent = slider.value;
+            }
+
+            roughnessSlider.addEventListener('input', function(e) {
+                updateValueDisplay(this);
+                updateMaterialProperty('roughness', parseFloat(this.value));
+            });
+
+            metalnessSlider.addEventListener('input', function(e) {
+                updateValueDisplay(this);
+                updateMaterialProperty('metalness', parseFloat(this.value));
+            });
+
+            envMapIntensitySlider.addEventListener('input', function(e) {
+                updateValueDisplay(this);
+                updateMaterialProperty('envMapIntensity', parseFloat(this.value));
+            });
+        }
+
+        function init() {
+            // Scene setup
+            scene = new THREE.Scene();
+            // Add environment map for better reflections
+            const envMapTexture = new THREE.CubeTextureLoader().load([
+                'https://threejs.org/examples/textures/cube/Park2/posx.jpg',
+                'https://threejs.org/examples/textures/cube/Park2/negx.jpg',
+                'https://threejs.org/examples/textures/cube/Park2/posy.jpg',
+                'https://threejs.org/examples/textures/cube/Park2/negy.jpg',
+                'https://threejs.org/examples/textures/cube/Park2/posz.jpg',
+                'https://threejs.org/examples/textures/cube/Park2/negz.jpg'
+            ]);
+            scene.environment = envMapTexture;
+            scene.background = new THREE.Color(0x1a1a1a);
+            scene.fog = new THREE.Fog(0x1a1a1a, 10, 50);
+
+            // Camera setup
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 2000);
+            camera.position.set(5, 5, 5);
+            camera.lookAt(0, 0, 0);
+
+            // Renderer setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.outputEncoding = THREE.sRGBEncoding;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // Controls setup
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.maxDistance = 20;
+            controls.minDistance = 2;
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+            scene.add(ambientLight);
+
+            const mainLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            mainLight.position.set(5, 5, 5);
+            mainLight.castShadow = true;
+            mainLight.shadow.mapSize.width = 2048;
+            mainLight.shadow.mapSize.height = 2048;
+            mainLight.shadow.camera.near = 0.1;
+            mainLight.shadow.camera.far = 50;
+            mainLight.shadow.camera.left = -10;
+            mainLight.shadow.camera.right = 10;
+            mainLight.shadow.camera.top = 10;
+            mainLight.shadow.camera.bottom = -10;
+            scene.add(mainLight);
+
+            const fillLight = new THREE.DirectionalLight(0x9090ff, 0.3);
+            fillLight.position.set(-5, 3, -5);
+            scene.add(fillLight);
+
+            // Ground plane
+            const groundGeometry = new THREE.PlaneGeometry(50, 50);
+            const groundMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x222222,
+                roughness: 0.8,
+                metalness: 0.2
+            });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = -0.01;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            // Grid helper
+            const gridHelper = new THREE.GridHelper(50, 50, 0x444444, 0x333333);
+            gridHelper.position.y = 0;
+            scene.add(gridHelper);
+
+            // Initialize material controls
+            initMaterialControls();
+
+            // Handle window resize
+            window.addEventListener('resize', onWindowResize, false);
+            
+            // Handle file input
+            document.getElementById('file-input').addEventListener('change', function(e) {
+                if (e.target.files[0]) {
+                    loadFBX(e.target.files[0]);
+                }
+            });
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function frameObject(object) {
+            const boundingBox = new THREE.Box3().setFromObject(object);
+            const center = boundingBox.getCenter(new THREE.Vector3());
+            const size = boundingBox.getSize(new THREE.Vector3());
+
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const fov = camera.fov * Math.PI / 180;
+            const cameraDistance = maxDim / (2 * Math.tan(fov / 2));
+
+            const distance = cameraDistance * 1.5;
+            const position = new THREE.Vector3(
+                center.x + distance,
+                center.y + distance * 0.5,
+                center.z + distance
+            );
+
+            camera.position.copy(position);
+            camera.lookAt(center);
+
+            controls.target.copy(center);
+            controls.update();
+
+            console.log('Camera positioned:', {
+                objectSize: size,
+                center: center,
+                cameraDistance: distance,
+                cameraPosition: camera.position.clone()
+            });
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        function loadFBX(file) {
+            const loading = document.getElementById('loading');
+            loading.style.display = 'block';
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const loader = new THREE.FBXLoader();
+                loader.load(
+                    URL.createObjectURL(file),
+                    function(object) {
+                        if (currentModel) {
+                            scene.remove(currentModel);
+                        }
+
+                        const box = new THREE.Box3().setFromObject(object);
+                        const center = box.getCenter(new THREE.Vector3());
+                        const size = box.getSize(new THREE.Vector3());
+
+                        const container = new THREE.Group();
+                        container.add(object);
+                        
+                        const bottomY = box.min.y;
+                        
+                        object.position.x = -center.x;
+                        object.position.y = -bottomY;
+                        object.position.z = -center.z;
+                        
+                        console.log('Model position details:', {
+                            originalMin: box.min,
+                            originalMax: box.max,
+                            bottomY: bottomY,
+                            finalPosition: object.position
+                        });
+
+                        const maxDim = Math.max(size.x, size.y, size.z);
+                        const scale = 5 / maxDim;
+                        container.scale.multiplyScalar(scale);
+
+                        object.traverse(function(child) {
+                            if (child.isMesh) {
+                                child.castShadow = true;
+                                child.receiveShadow = true;
+                                
+                                const oldMaterial = child.material;
+                                const newMaterial = new THREE.MeshStandardMaterial({
+                                    color: oldMaterial.color || 0xff0000,
+                                    roughness: parseFloat(document.getElementById('roughness').value),
+                                    metalness: parseFloat(document.getElementById('metalness').value),
+                                    envMapIntensity: parseFloat(document.getElementById('envMapIntensity').value),
+                                    side: THREE.DoubleSide
+                                });
+
+                                if (oldMaterial.map) newMaterial.map = oldMaterial.map;
+                                if (oldMaterial.normalMap) newMaterial.normalMap = oldMaterial.normalMap;
+                                
+                                child.material = newMaterial;
+
+                                console.log('Applied new material to mesh:', {
+                                    meshName: child.name,
+                                    material: {
+                                        roughness: newMaterial.roughness,
+                                        metalness: newMaterial.metalness,
+                                        envMapIntensity: newMaterial.envMapIntensity
+                                    }
+                                });
+                            }
+                        });
+
+                        scene.add(container);
+                        currentModel = container;
+                        loading.style.display = 'none';
+
+                        frameObject(container);
+
+                        console.log('Model loaded:', {
+                            size: size,
+                            center: center,
+                            scale: scale,
+                            boundingBox: box
+                        });
+                    },
+                    function(xhr) {
+                        console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+                    },
+                    function(error) {
+                        console.error('Error loading FBX:', error);
+                        loading.style.display = 'none';
+                        alert('Error loading FBX file. Please check the console for details.');
+                    }
+                );
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        // Initialize everything
+        init();
+        animate();
+    </script>
+</body>
+</html>
